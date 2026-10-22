@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useShipments } from '../context/ShipmentContext';
-import { Search, HelpCircle, X } from 'lucide-react';
+import { Search, HelpCircle, X, RefreshCw } from 'lucide-react';
 
 interface HeaderProps {
   onOpenPublishGuide: () => void;
@@ -9,7 +9,10 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({ onOpenPublishGuide }) => {
   const { 
     setSelectedTrackingId, 
-    setCurrentView 
+    setCurrentView,
+    isCloudSyncing,
+    cloudSyncStatus,
+    syncWithCloud
   } = useShipments();
 
   const [inputVal, setInputVal] = useState('');
@@ -92,6 +95,27 @@ export const Header: React.FC<HeaderProps> = ({ onOpenPublishGuide }) => {
 
         {/* Right Action Icons */}
         <div className="flex items-center gap-3">
+          {/* Cloud Multi-Device Live Sync Status */}
+          <button
+            onClick={() => syncWithCloud()}
+            title="Real-time Multi-Device Cloud Sync: All shipments are synchronized live across users and devices. Click to force instant refresh."
+            className="flex items-center gap-2 bg-emerald-50/70 hover:bg-emerald-100/70 border border-emerald-200 text-emerald-900 rounded-lg px-2.5 py-1.5 transition-colors text-xs shadow-sm"
+          >
+            <div className="relative flex items-center justify-center">
+              <span className={`w-2 h-2 rounded-full ${cloudSyncStatus === 'synced' ? 'bg-emerald-500 animate-pulse' : cloudSyncStatus === 'syncing' ? 'bg-amber-500 animate-ping' : 'bg-rose-500'}`} />
+            </div>
+            <div className="hidden sm:block text-left">
+              <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-700 block leading-tight">Multi-Device Sync</span>
+              <span className="text-[11px] font-semibold text-emerald-900 flex items-center gap-1">
+                {cloudSyncStatus === 'synced' && 'Cloud Active (Shared)'}
+                {cloudSyncStatus === 'syncing' && 'Syncing updates...'}
+                {cloudSyncStatus === 'error' && 'Reconnecting...'}
+                {cloudSyncStatus === 'offline' && 'Local Offline'}
+              </span>
+            </div>
+            <RefreshCw className={`w-3.5 h-3.5 text-emerald-700 ml-1 ${isCloudSyncing ? 'animate-spin text-brand-600' : ''}`} />
+          </button>
+
           <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             <div className="text-left text-xs">

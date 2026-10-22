@@ -12,7 +12,8 @@ import {
   ShieldCheck, 
   ChevronRight,
   Sparkles,
-  Info
+  Info,
+  Zap
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -86,6 +87,26 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenPublishGuide }) => {
             <span className="text-slate-300 font-medium">Demo Simulator Active</span>
           </div>
           <span className="text-slate-500 font-mono">5 Corridors</span>
+        </div>
+
+        {/* Airspace Advisory Quick Status */}
+        <div className="mt-2.5 p-2.5 bg-slate-900/90 rounded-xl border border-amber-500/30 text-xs">
+          <div className="flex items-center justify-between text-amber-400 font-bold mb-1">
+            <span className="flex items-center gap-1.5 text-[11px]">
+              <Zap className="w-3.5 h-3.5" />
+              Airspace Restrictions
+            </span>
+            <span className="text-[10px] px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40">3 Groundings</span>
+          </div>
+          <p className="text-[10px] text-slate-400 leading-tight">
+            Flights grounded. Dynamic multimodal reroute active.
+          </p>
+          {counts.rerouted > 0 && (
+            <div className="mt-1.5 pt-1 border-t border-slate-800 text-[10px] text-purple-300 font-bold flex items-center justify-between">
+              <span>Bypassed Cargo:</span>
+              <span className="bg-purple-600/30 text-purple-200 px-1.5 py-0.5 rounded border border-purple-500/40">{counts.rerouted} consignments</span>
+            </div>
+          )}
         </div>
       </div>
 

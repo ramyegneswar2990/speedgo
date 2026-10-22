@@ -10,7 +10,11 @@ import {
   AlertTriangle, 
   CheckCircle2, 
   FastForward,
-  Globe
+  Globe,
+  Zap,
+  MessageSquare,
+  Send,
+  RotateCcw
 } from 'lucide-react';
 
 export const ShipmentDetailsPage: React.FC = () => {
@@ -20,14 +24,21 @@ export const ShipmentDetailsPage: React.FC = () => {
     setSelectedTrackingId, 
     getShipment, 
     advanceShipmentStatus, 
+    divertToWarehousePickup,
     simulateDelay, 
     resolveDelay,
-    setCurrentView 
+    setCurrentView,
+    autoRerouteShipment,
+    revertReroute,
+    sendCustomerNotification
   } = useShipments();
 
   const [activeShipmentId, setActiveShipmentId] = useState(selectedTrackingId || '');
   const [operatorNote, setOperatorNote] = useState('');
   const [delayInputReason, setDelayInputReason] = useState('Heavy rain & highway construction detour near NH-65 Tollway');
+  const [notifChannel, setNotifChannel] = useState<'WHATSAPP' | 'SMS' | 'EMAIL'>('WHATSAPP');
+  const [notifCustomMsg, setNotifCustomMsg] = useState('');
+  const [notifFeedback, setNotifFeedback] = useState<string | null>(null);
 
   const shipment = getShipment(selectedTrackingId || activeShipmentId) || (shipments.length > 0 ? shipments[0] : undefined);
 
@@ -227,12 +238,211 @@ export const ShipmentDetailsPage: React.FC = () => {
                 />
                 <button
                   onClick={handleSimulateDelay}
-                  className="w-full py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold transition-colors"
+                  className="w-full py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
                 >
                   Simulate Highway Delay Alert
                 </button>
               </div>
             )}
+
+            {shipment.status !== 'DELIVERED' && shipment.status !== 'COLLECTED' && (
+              <div className="pt-2 border-t border-slate-700/80">
+                <button
+                  onClick={() => {
+                    divertToWarehousePickup(
+                      shipment.id,
+                      shipment.assignedHub?.id || 'HUB-VJA-ROAD',
+                      'Destination delivery address unreachable / remote courier zone',
+                      'Operator Console (Exception Desk)'
+                    );
+                  }}
+                  className="w-full py-2 bg-rose-950/70 hover:bg-rose-900 border border-rose-700 text-rose-200 rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                  title="Divert to nearby warehouse hub for customer self-collection when address is unavailable"
+                >
+                  <span>⚠️ Location Unavailable → Divert to Hub</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* DYNAMIC ROUTE PLANNING & AIRSPACE CONTINGENCY CONTROL DESK */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Dynamic Route Optimizer Panel */}
+        <div className="bg-slate-900 rounded-2xl p-6 text-white border border-slate-800 shadow-xl space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-purple-600/30 border border-purple-500 flex items-center justify-center text-purple-300">
+                <Zap className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="font-bold text-sm text-white">Dynamic Route Planning & Airspace Bypass</h4>
+                <p className="text-[11px] text-slate-400">Weather & Airspace Restrictions Contingency Desk</p>
+              </div>
+            </div>
+            {shipment.isRerouted && (
+              <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                Rerouted (Bypass #{shipment.rerouteCount || 1})
+              </span>
+            )}
+          </div>
+
+          {shipment.isRerouted ? (
+            <div className="space-y-3 text-xs">
+              <div className="p-3 bg-purple-950/40 rounded-xl border border-purple-800/60 space-y-2">
+                <div className="flex items-center justify-between text-purple-300 font-semibold">
+                  <span>⚡ Active Contingency Corridor:</span>
+                  <span className="font-mono text-white">{shipment.transportDetails?.identifier}</span>
+                </div>
+                <p className="text-[11px] text-slate-300">
+                  {shipment.reroutedReason || 'Air cargo diverted to avoid closed airspace & turbulent squall lines.'}
+                </p>
+                <div className="text-[11px] text-slate-400 pt-1.5 border-t border-purple-900/80 flex items-center justify-between">
+                  <span>Original: {shipment.originalTransportDetails?.identifier || 'Air Cargo'}</span>
+                  <span className="text-emerald-400 font-bold">Guaranteed Slot</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  onClick={() => autoRerouteShipment(shipment.id)}
+                  className="flex-1 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-bold text-xs transition-colors flex items-center justify-center gap-1.5"
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  <span>Re-optimize Corridor</span>
+                </button>
+                <button
+                  onClick={() => revertReroute(shipment.id)}
+                  className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-semibold text-xs transition-colors flex items-center gap-1 border border-slate-700"
+                  title="Revert back to scheduled air transport"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Revert</span>
+                </button>
+              </div>
+            </div>
+          ) : shipment.transportMode === 'AIR' ? (
+            <div className="space-y-3 text-xs">
+              <div className="p-3 bg-amber-950/40 rounded-xl border border-amber-800/60 text-amber-200">
+                <strong className="block text-amber-300 font-bold">⚠️ Airspace Ground Stop Advisory Active</strong>
+                <p className="text-[11px] mt-1 text-slate-300">
+                  Multiple flight delays/cancellations reported. Divert this consignment now to an Ocean or High-Speed Rail corridor to preserve delivery commitments.
+                </p>
+              </div>
+              <button
+                onClick={() => autoRerouteShipment(shipment.id)}
+                className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black rounded-xl text-xs transition-all shadow-md flex items-center justify-center gap-1.5"
+              >
+                <Zap className="w-4 h-4 fill-slate-950" />
+                <span>⚡ Auto-Reroute via Guaranteed Ocean/Rail Corridor</span>
+              </button>
+            </div>
+          ) : (
+            <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/60 text-xs text-slate-400">
+              <p>
+                This consignment is currently allocated to <strong>{shipment.transportMode}</strong> linehaul ({shipment.transportDetails?.identifier || 'Surface Transport'}). It operates safely outside restricted air corridors.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Multi-Channel Customer Notification Dispatcher */}
+        <div className="bg-slate-900 rounded-2xl p-6 text-white border border-slate-800 shadow-xl space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-cyan-600/30 border border-cyan-500 flex items-center justify-center text-cyan-300">
+                <MessageSquare className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="font-bold text-sm text-white">Timely Customer Notification Dispatcher</h4>
+                <p className="text-[11px] text-slate-400">Recipients: {shipment.receiver.name} ({shipment.receiver.phone})</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-3 text-xs">
+            {/* Channel Buttons */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setNotifChannel('WHATSAPP')}
+                className={`flex-1 py-1.5 px-3 rounded-lg font-bold text-xs transition-all flex items-center justify-center gap-1.5 ${
+                  notifChannel === 'WHATSAPP'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'bg-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>📲 WhatsApp</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setNotifChannel('SMS')}
+                className={`flex-1 py-1.5 px-3 rounded-lg font-bold text-xs transition-all flex items-center justify-center gap-1.5 ${
+                  notifChannel === 'SMS'
+                    ? 'bg-sky-600 text-white shadow-xs'
+                    : 'bg-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>💬 SMS Text</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setNotifChannel('EMAIL')}
+                className={`flex-1 py-1.5 px-3 rounded-lg font-bold text-xs transition-all flex items-center justify-center gap-1.5 ${
+                  notifChannel === 'EMAIL'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'bg-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>✉️ Email</span>
+              </button>
+            </div>
+
+            {/* Custom Message Input */}
+            <div>
+              <input
+                type="text"
+                value={notifCustomMsg}
+                onChange={(e) => setNotifCustomMsg(e.target.value)}
+                placeholder={`Custom alert (optional) or leave blank for automated ETA advisory...`}
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              />
+            </div>
+
+            <button
+              onClick={() => {
+                sendCustomerNotification(shipment.id, notifChannel, notifCustomMsg.trim() || undefined);
+                setNotifCustomMsg('');
+                setNotifFeedback(`Live ${notifChannel} update sent to ${shipment.receiver.name}!`);
+                setTimeout(() => setNotifFeedback(null), 3000);
+              }}
+              className="w-full py-2.5 bg-gradient-to-r from-cyan-600 to-brand-600 hover:from-cyan-500 hover:to-brand-500 text-white font-bold rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 shadow-md shadow-brand-900/40"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>Dispatch Live {notifChannel} Customer Advisory</span>
+            </button>
+
+            {notifFeedback && (
+              <div className="p-2 bg-emerald-500/20 border border-emerald-500/40 rounded text-emerald-300 text-[11px] font-semibold text-center">
+                ✓ {notifFeedback}
+              </div>
+            )}
+
+            {/* Recent Notifications for this shipment */}
+            <div className="pt-2 border-t border-slate-800 max-h-32 overflow-y-auto space-y-1.5">
+              <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Recent Dispatch Log</span>
+              {(shipment.customerNotifications && shipment.customerNotifications.length > 0) ? (
+                shipment.customerNotifications.slice(0, 3).map((notif) => (
+                  <div key={notif.id} className="p-2 bg-slate-950/60 rounded border border-slate-800 text-[11px] flex items-center justify-between">
+                    <span className="text-slate-300 font-mono truncate max-w-[280px]">[{notif.channel}] {notif.message}</span>
+                    <span className="text-emerald-400 font-bold text-[10px] shrink-0">✓ Delivered</span>
+                  </div>
+                ))
+              ) : (
+                <span className="text-slate-500 text-[11px] italic block">No previous advisories sent.</span>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -305,6 +515,19 @@ export const ShipmentDetailsPage: React.FC = () => {
                 {shipment.receiver.city} ({shipment.receiver.country || 'International'}) — PIN / Port <span className="font-mono">{shipment.receiver.pinCode}</span>
               </p>
             </div>
+
+            {shipment.isLocationUnavailable && (
+              <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 space-y-1">
+                <span className="font-bold text-amber-900 block">⚠️ Location Unavailable:</span>
+                <p className="text-[11px] text-amber-800 leading-tight">
+                  Doorstep courier cannot reach address. Consignment held at <strong>{shipment.assignedHub?.name || 'Nearby Warehouse'}</strong> for customer collection.
+                </p>
+                <div className="flex items-center gap-2 pt-1 font-mono font-bold text-[10px]">
+                  <span className="bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded">Ref: {shipment.pickupReferenceCode || '---'}</span>
+                  <span className="bg-brand-100 text-brand-900 px-1.5 py-0.5 rounded">OTP: {shipment.pickupSecurityOtp || '---'}</span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

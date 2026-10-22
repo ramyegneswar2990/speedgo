@@ -262,18 +262,27 @@ export function evaluatePinEligibility(pinCode: string, country = 'India'): Serv
     };
   }
 
-  // 3. Fallback: check if matches unsupported or unknown
+  // 3. Fallback: For any remote or unserviceable PIN, assign nearest warehouse for customer self-collection
   const unsupported = KNOWN_UNSUPPORTED_PINS[cleanPin];
   const locationName = unsupported ? `${unsupported.area}, ${unsupported.city}` : `PIN Code ${cleanPin}`;
+  
+  // Pick closest regional warehouse hub based on PIN prefix
+  const fallbackHub = cleanPin.startsWith('50')
+    ? DEMO_HUBS['HUB-HYD-RAIL']
+    : cleanPin.startsWith('52')
+    ? DEMO_HUBS['HUB-VJA-ROAD']
+    : cleanPin.startsWith('40')
+    ? DEMO_HUBS['HUB-BOM-SEA']
+    : DEMO_HUBS['HUB-HYD-AIR'];
 
   return {
     pinCode: cleanPin,
-    city: unsupported ? unsupported.city : 'Unregistered Territory',
+    city: unsupported ? unsupported.city : 'Remote / Outskirts Zone',
     country: 'India',
     homeDeliveryAvailable: false,
-    eligibleHub: null,
-    message: `Out of Service Network: Speed Logistics does not currently have automated delivery or regional hub coverage in ${locationName}. Please contact Enterprise Freight Support (freight@speedlogistics.demo / 1800-SPEED-GO) for custom chartered logistics.`,
-    status: 'UNSUPPORTED_AREA',
+    eligibleHub: { ...fallbackHub, distanceKm: 28.5 },
+    message: `⚠️ Direct doorstep delivery is unavailable for ${locationName}. The customer should come and collect their shipment at our nearby warehouse: ${fallbackHub.name} (${fallbackHub.address}).`,
+    status: 'COVERED_HUB_ONLY',
   };
 }
 

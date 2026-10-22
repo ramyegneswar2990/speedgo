@@ -125,10 +125,73 @@ export interface Shipment {
   deliveryProofOtp?: string;
   deliveredAt?: string;
   
-  // Delay/Exception handling
+  // Delay/Exception & Location Unavailable handling
   isDelayed?: boolean;
   delayReason?: string;
+  isLocationUnavailable?: boolean;
+  locationUnavailableReason?: string;
+  divertedToHubId?: string;
+  divertedAt?: string;
   specialInstructions?: string;
+
+  // Dynamic Route Planning & Automatic Rerouting (Airspace/Weather Disruption)
+  isRerouted?: boolean;
+  rerouteCount?: number;
+  reroutedAt?: string;
+  reroutedReason?: string;
+  disruptionId?: string;
+  activeDisruption?: RouteDisruption;
+  originalRoute?: ShipmentRoute;
+  originalTransportDetails?: TransportDetails;
+  availableAlternatives?: AlternativeRouteProposal[];
+  customerNotifications?: CustomerNotification[];
+}
+
+export type DisruptionType =
+  | 'WEATHER_STORM'
+  | 'AIRSPACE_RESTRICTION'
+  | 'FLIGHT_CANCELLED'
+  | 'PORT_CONGESTION';
+
+export interface AlternativeRouteProposal {
+  id: string;
+  title: string;
+  mode: TransportMode;
+  carrierName: string;
+  identifier: string; // e.g. Vessel MSC Aurora V-120 / Train CONCOR Express
+  departureTerminal: string;
+  arrivalTerminal: string;
+  estimatedTransitChange: string; // e.g. "+36 hrs (Maritime Express)"
+  newEstimatedArrival: string;
+  costImpact: string; // e.g. "Zero Surcharge (Guaranteed SLA)"
+  rationale: string;
+}
+
+export interface RouteDisruption {
+  id: string;
+  type: DisruptionType;
+  title: string;
+  severity: 'CRITICAL' | 'WARNING';
+  affectedAirspaceOrCorridor: string;
+  affectedCarrierOrFlight: string; // e.g. "EK-9821 / Emirates SkyCargo"
+  reportedAt: string;
+  description: string;
+  contingencyMode: TransportMode;
+  suggestedAlternative: AlternativeRouteProposal;
+}
+
+export interface CustomerNotification {
+  id: string;
+  shipmentId: string;
+  trackingId: string;
+  recipientName: string;
+  recipientPhone: string;
+  recipientEmail: string;
+  channel: 'SMS' | 'WHATSAPP' | 'EMAIL';
+  title: string;
+  message: string;
+  sentAt: string;
+  deliveryStatus: 'DELIVERED' | 'DISPATCHED';
 }
 
 export interface ServiceEligibilityResult {

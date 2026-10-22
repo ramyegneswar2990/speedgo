@@ -78,13 +78,14 @@ export const CreateShipmentPage: React.FC = () => {
       return;
     }
 
-    // Check critical delivery business rule
-    if (eligibility.status === 'UNSUPPORTED_AREA') {
+    // Check delivery business rule
+    if (eligibility.status === 'UNSUPPORTED_AREA' && !eligibility.eligibleHub) {
       alert('Cannot create booking: This postal PIN code is currently outside automated delivery and hub network.');
       return;
     }
 
-    const deliveryType: DeliveryType = eligibility.homeDeliveryAvailable ? 'HOME_DELIVERY' : 'HUB_PICKUP';
+    const isLocationUnavail = !eligibility.homeDeliveryAvailable || eligibility.status === 'COVERED_HUB_ONLY';
+    const deliveryType: DeliveryType = isLocationUnavail ? 'HUB_PICKUP' : 'HOME_DELIVERY';
 
     const estimatedDate = new Date();
     estimatedDate.setDate(estimatedDate.getDate() + (receiverCountry === 'India' ? 2 : 5));
@@ -98,6 +99,10 @@ export const CreateShipmentPage: React.FC = () => {
       dimensions: dimensions || 'Standard Freight Box',
       declaredValueInr: parseFloat(declaredValue) || 25000,
       contentsDescription: description || `${category} Consignment`,
+      isLocationUnavailable: isLocationUnavail,
+      locationUnavailableReason: isLocationUnavail
+        ? 'Delivery location unavailable / out of doorstep courier zone. Customer must collect at nearby warehouse.'
+        : undefined,
       sender: {
         name: senderName,
         company: senderCompany,

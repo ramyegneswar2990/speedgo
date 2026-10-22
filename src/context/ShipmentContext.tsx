@@ -1,8 +1,19 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import type { Shipment, ShipmentStatus, TransportDetails } from '../types/logistics';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
+import type { 
+  Shipment, 
+  ShipmentStatus, 
+  TransportDetails, 
+  DeliveryType, 
+  CheckpointEvent,
+  RouteDisruption,
+  AlternativeRouteProposal,
+  CustomerNotification
+} from '../types/logistics';
 import { INITIAL_MOCK_SHIPMENTS } from '../data/mockShipments';
+import { DEMO_HUBS } from '../data/serviceAreas';
+import { ACTIVE_SYSTEM_DISRUPTIONS, getAlternativeForShipment } from '../data/disruptions';
 
-export type ViewType = 'dashboard' | 'create' | 'track' | 'warehouse' | 'details';
+export type ViewType = 'dashboard' | 'create' | 'track' | 'warehouse' | 'details' | 'disruptions';
 
 interface ShipmentContextType {
   shipments: Shipment[];
@@ -22,11 +33,25 @@ interface ShipmentContextType {
   allocateTransportMode: (shipmentId: string, transportDetails: TransportDetails, staffName: string) => void;
   confirmWarehouseInspection: (shipmentId: string, staffName: string) => void;
   confirmCollection: (shipmentId: string, verifiedReference: string, staffName: string) => { success: boolean; message: string };
+  divertToWarehousePickup: (shipmentId: string, warehouseId: string, reason: string, staffName: string) => void;
   simulateDelay: (shipmentId: string, reason: string) => void;
   resolveDelay: (shipmentId: string) => void;
   clearAllShipments: () => void;
   resetDemoData: () => void;
   loadScenario: (scenarioId: string) => void;
+
+  // Dynamic Route Planning & Automatic Rerouting (Airspace/Weather Disruption)
+  activeDisruptions: RouteDisruption[];
+  autoRerouteShipment: (shipmentId: string, alternative?: AlternativeRouteProposal, staffName?: string) => void;
+  autoRerouteAllAffected: (disruptionId?: string, staffName?: string) => { reroutedCount: number };
+  revertReroute: (shipmentId: string) => void;
+  sendCustomerNotification: (shipmentId: string, channel: 'SMS' | 'WHATSAPP' | 'EMAIL', customMsg?: string) => void;
+  
+  // Real-time Cloud Multi-Device Sync
+  isCloudSyncing: boolean;
+  cloudSyncStatus: 'synced' | 'syncing' | 'error' | 'offline';
+  lastCloudSyncTime: Date | null;
+  syncWithCloud: () => Promise<void>;
   
   // Metrics for dashboard cards
   counts: {
@@ -37,11 +62,45 @@ interface ShipmentContextType {
     inWarehouse: number; // In origin warehouse, approved, or destination hub
     awaitingPickup: number; // READY_FOR_PICKUP for hub pickup
     outForDelivery: number;
+    rerouted: number;
+    disruptionsActive: number;
   };
 }
 
 // Dedicated fresh storage key so all old mock data is removed
-const STORAGE_KEY = 'speed_logistics_user_manual_v3';
+const STORAGE_KEY = 'speed_logistics_user_manual_v4';
+const CLOUD_API_URL = 'https://api.restful-api.dev/objects/ff808181a09d98f701a161be47004c7a';
+const BROADCAST_CHANNEL_NAME = 'speedgo_live_multi_sync_v1';
+
+// Helper to merge lists without dropping shipments created on another machine
+const mergeShipmentLists = (local: Shipment[], incoming: Shipment[]): Shipment[] => {
+  const map = new Map<string, Shipment>();
+
+  for (const s of local) {
+    if (s && s.id) {
+      map.set(s.id, s);
+    }
+  }
+
+  for (const item of incoming) {
+    if (!item || !item.id) continue;
+    const existing = map.get(item.id);
+    if (!existing) {
+      map.set(item.id, item);
+    } else {
+      // Keep version with more timeline checkpoints or newer updates
+      const existingTimelineCount = existing.timeline?.length || 0;
+      const incomingTimelineCount = item.timeline?.length || 0;
+      if (incomingTimelineCount >= existingTimelineCount) {
+        map.set(item.id, item);
+      }
+    }
+  }
+
+  return Array.from(map.values()).sort(
+    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+  );
+};
 
 const ShipmentContext = createContext<ShipmentContextType | undefined>(undefined);
 
@@ -64,6 +123,34 @@ export const ShipmentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   });
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Real-time Cloud Multi-Device Sync state
+  const [isCloudSyncing, setIsCloudSyncing] = useState<boolean>(false);
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<'synced' | 'syncing' | 'error' | 'offline'>('synced');
+  const [lastCloudSyncTime, setLastCloudSyncTime] = useState<Date | null>(new Date());
+
+  const isPushingRef = useRef<boolean>(false);
+  const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
+
+  // Setup multi-tab BroadcastChannel
+  useEffect(() => {
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        const bc = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
+        broadcastChannelRef.current = bc;
+        bc.onmessage = (event) => {
+          if (event.data && Array.isArray(event.data.shipments)) {
+            setShipments((prev) => mergeShipmentLists(prev, event.data.shipments));
+          }
+        };
+        return () => {
+          bc.close();
+        };
+      }
+    } catch (e) {
+      console.warn('BroadcastChannel not supported', e);
+    }
+  }, []);
+
   // Persist to localStorage whenever shipments change
   useEffect(() => {
     try {
@@ -72,6 +159,100 @@ export const ShipmentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       console.error('Failed to save to localStorage', e);
     }
   }, [shipments]);
+
+  // Push updated shipments to the central cloud API
+  const pushToCloud = useCallback(async (listToPush: Shipment[]) => {
+    if (isPushingRef.current) return;
+    isPushingRef.current = true;
+    try {
+      broadcastChannelRef.current?.postMessage({ shipments: listToPush });
+
+      await fetch(CLOUD_API_URL, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: 'SPEEDGO_CENTRAL_DB',
+          data: {
+            shipments: listToPush,
+            updatedAt: Date.now(),
+          },
+        }),
+      });
+      setCloudSyncStatus('synced');
+      setLastCloudSyncTime(new Date());
+    } catch (err) {
+      console.error('Cloud push failed:', err);
+      setCloudSyncStatus('error');
+    } finally {
+      isPushingRef.current = false;
+    }
+  }, []);
+
+  // Fetch from central cloud API and merge
+  const syncWithCloud = useCallback(async () => {
+    setIsCloudSyncing(true);
+    setCloudSyncStatus('syncing');
+    try {
+      const response = await fetch(CLOUD_API_URL, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        cache: 'no-store',
+      });
+      if (response.ok) {
+        const json = await response.json();
+        const remoteShipments: Shipment[] = json?.data?.shipments || [];
+
+        setShipments((currentLocal) => {
+          const merged = mergeShipmentLists(currentLocal, remoteShipments);
+          if (merged.length > remoteShipments.length) {
+            pushToCloud(merged);
+          }
+          return merged;
+        });
+        setCloudSyncStatus('synced');
+        setLastCloudSyncTime(new Date());
+      } else {
+        setCloudSyncStatus('error');
+      }
+    } catch (err) {
+      console.warn('Background cloud fetch error (offline or network blocked):', err);
+      setCloudSyncStatus(navigator.onLine ? 'error' : 'offline');
+    } finally {
+      setIsCloudSyncing(false);
+    }
+  }, [pushToCloud]);
+
+  // Initial fetch on mount & background polling every 3.5 seconds
+  useEffect(() => {
+    syncWithCloud();
+
+    const interval = setInterval(() => {
+      syncWithCloud();
+    }, 3500);
+
+    const onFocus = () => {
+      syncWithCloud();
+    };
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('online', onFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('online', onFocus);
+    };
+  }, [syncWithCloud]);
+
+  // Helper to update state and push to cloud
+  const updateShipmentsState = useCallback((updater: (prev: Shipment[]) => Shipment[]) => {
+    setShipments((prev) => {
+      const next = updater(prev);
+      pushToCloud(next);
+      return next;
+    });
+  }, [pushToCloud]);
 
   // Derived counts
   const counts = {
@@ -90,6 +271,8 @@ export const ShipmentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       (s) => s.deliveryType === 'HUB_PICKUP' && s.status === 'READY_FOR_PICKUP'
     ).length,
     outForDelivery: shipments.filter((s) => s.status === 'OUT_FOR_DELIVERY').length,
+    rerouted: shipments.filter((s) => s.isRerouted).length,
+    disruptionsActive: ACTIVE_SYSTEM_DISRUPTIONS.length,
   };
 
   const getShipment = (id: string): Shipment | undefined => {
@@ -142,7 +325,7 @@ export const ShipmentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       timeline: [initialEvent],
     };
 
-    setShipments((prev) => [newShipment, ...prev]);
+    updateShipmentsState((prev) => [newShipment, ...prev]);
     setSelectedTrackingId(trackingId);
     return newShipment;
   };
@@ -155,7 +338,7 @@ export const ShipmentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       minute: '2-digit',
     });
 
-    setShipments((prev) =>
+    updateShipmentsState((prev) =>
       prev.map((s) => {
         if (s.id !== shipmentId) return s;
 
@@ -276,7 +459,7 @@ export const ShipmentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const modeName = modeLabels[transportDetails.mode] || transportDetails.mode;
     const modeIcon = modeIcons[transportDetails.mode] || '📦';
 
-    setShipments((prev) =>
+    updateShipmentsState((prev) =>
       prev.map((s) => {
         if (s.id !== shipmentId) return s;
 
@@ -319,7 +502,7 @@ export const ShipmentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       minute: '2-digit',
     });
 
-    setShipments((prev) =>
+    updateShipmentsState((prev) =>
       prev.map((s) => {
         if (s.id !== shipmentId) return s;
 
@@ -346,6 +529,59 @@ export const ShipmentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           pickupReadyAt: nowFormatted,
           pickupStaffConfirmedAt: nowFormatted,
           pickupStaffName: staffName,
+          timeline: [...s.timeline, newEvent],
+        };
+      })
+    );
+  };
+
+  const divertToWarehousePickup = (
+    shipmentId: string,
+    warehouseId: string,
+    reason: string,
+    staffName: string
+  ) => {
+    const hub = DEMO_HUBS[warehouseId] || DEMO_HUBS['HUB-VJA-ROAD'];
+    const now = new Date();
+    const nowFormatted = now.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+
+    updateShipmentsState((prev) =>
+      prev.map((s) => {
+        if (s.id !== shipmentId) return s;
+
+        const pickupRef = s.pickupReferenceCode || `REF-${s.id.slice(-4) || randomSuffix}-PK`;
+        const pickupOtp = s.pickupSecurityOtp || `${Math.floor(1000 + Math.random() * 9000)}`;
+
+        const newEvent: CheckpointEvent = {
+          id: `EVT-${Date.now()}`,
+          timestamp: nowFormatted,
+          status: 'READY_FOR_PICKUP' as ShipmentStatus,
+          title: '📍 Delivery Location Unavailable — Held for Customer Warehouse Collection',
+          location: `${hub.name}, ${hub.city}`,
+          facility: hub.name,
+          description: `Consignee delivery address is unreachable or out of service area (${reason || 'Doorstep delivery unavailable'}). Consignment safely transferred to nearby warehouse hub (${hub.name}, ${hub.address}). Customer notified to collect at warehouse counter with Pickup Reference ${pickupRef} and OTP ${pickupOtp}.`,
+          operator: `${staffName} (Delivery Exception Desk)`,
+          isCompleted: true,
+        };
+
+        return {
+          ...s,
+          deliveryType: 'HUB_PICKUP' as DeliveryType,
+          status: 'READY_FOR_PICKUP' as ShipmentStatus,
+          assignedHub: { ...hub, distanceKm: 5.2 },
+          isLocationUnavailable: true,
+          locationUnavailableReason: reason,
+          divertedToHubId: hub.id,
+          divertedAt: nowFormatted,
+          pickupReferenceCode: pickupRef,
+          pickupSecurityOtp: pickupOtp,
+          pickupReadyAt: nowFormatted,
           timeline: [...s.timeline, newEvent],
         };
       })
@@ -387,7 +623,7 @@ export const ShipmentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       minute: '2-digit',
     });
 
-    setShipments((prev) =>
+    updateShipmentsState((prev) =>
       prev.map((s) => {
         if (s.id !== shipmentId) return s;
 
@@ -417,6 +653,213 @@ export const ShipmentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
   };
 
+  const autoRerouteShipment = (
+    shipmentId: string,
+    customAlternative?: AlternativeRouteProposal,
+    staffName?: string
+  ) => {
+    const now = new Date();
+    const nowFormatted = now.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    updateShipmentsState((prev) =>
+      prev.map((s) => {
+        if (s.id !== shipmentId) return s;
+
+        const alt = customAlternative || getAlternativeForShipment(s.receiver.country, s.transportMode);
+
+        const notif: CustomerNotification = {
+          id: `NOTIF-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
+          shipmentId: s.id,
+          trackingId: s.id,
+          recipientName: s.receiver.name,
+          recipientPhone: s.receiver.phone,
+          recipientEmail: s.receiver.email || 'customer@speedlogistics.demo',
+          channel: 'WHATSAPP',
+          title: '⚡ Airspace Disruption Notice: Consignment Dynamically Rerouted',
+          message: `Speed Logistics Update: Your shipment ${s.id} to ${s.receiver.city} has been rerouted due to European/Gulf weather & airspace restrictions. Contingency linehaul allocated: ${alt.title} (${alt.carrierName} ${alt.identifier}). Revised Delivery ETA: ${new Date(alt.newEstimatedArrival).toLocaleDateString()}. Track live: https://speedlogistics.demo/track?id=${s.id}`,
+          sentAt: nowFormatted,
+          deliveryStatus: 'DELIVERED',
+        };
+
+        const rerouteEvent: CheckpointEvent = {
+          id: `EVT-${Date.now()}`,
+          timestamp: nowFormatted,
+          status: s.status === 'BOOKED' ? 'ORIGIN_WAREHOUSE_APPROVED' : s.status,
+          title: `⚡ Dynamic Reroute Executed: Transferred to ${alt.mode === 'OCEAN' ? '🚢 Ocean Cargo Vessel' : alt.mode === 'RAIL' ? '🚆 Intermodal Rail' : '🚛 Road Hauler'} (${alt.carrierName})`,
+          location: alt.departureTerminal,
+          facility: alt.departureTerminal,
+          description: `Primary scheduled flight grounded due to severe weather & airspace restrictions. Autonomous Dynamic Reroute Engine diverted cargo to multi-modal contingency corridor: ${alt.title} (${alt.identifier}). Transit change: ${alt.estimatedTransitChange}. Customer WhatsApp/SMS dispatched.`,
+          operator: `${staffName || 'Dynamic Route Optimization Engine'} (Airspace Disruption Desk)`,
+          isCompleted: true,
+        };
+
+        return {
+          ...s,
+          isRerouted: true,
+          rerouteCount: (s.rerouteCount || 0) + 1,
+          reroutedAt: nowFormatted,
+          reroutedReason: alt.rationale,
+          originalRoute: s.originalRoute || s.route,
+          originalTransportDetails: s.originalTransportDetails || s.transportDetails,
+          transportMode: alt.mode,
+          transportDetails: {
+            mode: alt.mode,
+            carrierName: alt.carrierName,
+            identifier: alt.identifier,
+            departureTerminal: alt.departureTerminal,
+            arrivalTerminal: alt.arrivalTerminal,
+            customsDeclarationCode: s.transportDetails?.customsDeclarationCode || 'EXP-REROUTE-VERIFIED',
+            assignedByStaff: staffName || 'Autonomous Dynamic Rerouting Engine',
+            assignedAt: nowFormatted,
+          },
+          estimatedArrival: alt.newEstimatedArrival,
+          route: {
+            ...s.route,
+            transitCorridor: `${s.route.originCity} to ${s.route.destinationCity} via ${alt.title} [${alt.identifier}]`,
+          },
+          timeline: [...s.timeline, rerouteEvent],
+          customerNotifications: [notif, ...(s.customerNotifications || [])],
+        };
+      })
+    );
+  };
+
+  const autoRerouteAllAffected = (_disruptionId?: string, staffName?: string): { reroutedCount: number } => {
+    let count = 0;
+    const now = new Date();
+    const nowFormatted = now.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    updateShipmentsState((prev) =>
+      prev.map((s) => {
+        // Reroute active shipments that are not completed
+        if (s.status === 'DELIVERED' || s.status === 'COLLECTED') return s;
+
+        const alt = getAlternativeForShipment(s.receiver.country, s.transportMode);
+        count++;
+
+        const notif: CustomerNotification = {
+          id: `NOTIF-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
+          shipmentId: s.id,
+          trackingId: s.id,
+          recipientName: s.receiver.name,
+          recipientPhone: s.receiver.phone,
+          recipientEmail: s.receiver.email || 'customer@speedlogistics.demo',
+          channel: 'WHATSAPP',
+          title: '⚡ Fleet Emergency Reroute: Airspace Contingency Active',
+          message: `Speed Logistics Advisory: Due to changing weather and airspace restrictions, consignment ${s.id} is diverted to ${alt.title} (${alt.identifier}). New ETA: ${new Date(alt.newEstimatedArrival).toLocaleDateString()}. Track: https://speedlogistics.demo/track?id=${s.id}`,
+          sentAt: nowFormatted,
+          deliveryStatus: 'DELIVERED',
+        };
+
+        const rerouteEvent: CheckpointEvent = {
+          id: `EVT-${Date.now()}-${count}`,
+          timestamp: nowFormatted,
+          status: s.status === 'BOOKED' ? 'ORIGIN_WAREHOUSE_APPROVED' : s.status,
+          title: `⚡ Fleet Airspace Bypass: Diverted to ${alt.mode === 'OCEAN' ? '🚢 Ocean Cargo' : alt.mode === 'RAIL' ? '🚆 Intermodal Rail' : '🚛 Road Freight'}`,
+          location: alt.departureTerminal,
+          facility: alt.departureTerminal,
+          description: `Emergency airspace bypass: Flight cancelled due to regional turbulence/closure. Diverted to contingency corridor ${alt.title}. Automated customer notification dispatched.`,
+          operator: `${staffName || 'Dynamic Fleet Optimizer'} (Airspace Disruption Desk)`,
+          isCompleted: true,
+        };
+
+        return {
+          ...s,
+          isRerouted: true,
+          rerouteCount: (s.rerouteCount || 0) + 1,
+          reroutedAt: nowFormatted,
+          reroutedReason: alt.rationale,
+          originalRoute: s.originalRoute || s.route,
+          originalTransportDetails: s.originalTransportDetails || s.transportDetails,
+          transportMode: alt.mode,
+          transportDetails: {
+            mode: alt.mode,
+            carrierName: alt.carrierName,
+            identifier: alt.identifier,
+            departureTerminal: alt.departureTerminal,
+            arrivalTerminal: alt.arrivalTerminal,
+            customsDeclarationCode: s.transportDetails?.customsDeclarationCode || 'EXP-REROUTE-VERIFIED',
+            assignedByStaff: staffName || 'Dynamic Fleet Optimizer',
+            assignedAt: nowFormatted,
+          },
+          estimatedArrival: alt.newEstimatedArrival,
+          route: {
+            ...s.route,
+            transitCorridor: `${s.route.originCity} to ${s.route.destinationCity} via ${alt.title} [${alt.identifier}]`,
+          },
+          timeline: [...s.timeline, rerouteEvent],
+          customerNotifications: [notif, ...(s.customerNotifications || [])],
+        };
+      })
+    );
+
+    return { reroutedCount: count };
+  };
+
+  const revertReroute = (shipmentId: string) => {
+    updateShipmentsState((prev) =>
+      prev.map((s) => {
+        if (s.id !== shipmentId || !s.originalRoute || !s.originalTransportDetails) return s;
+
+        return {
+          ...s,
+          isRerouted: false,
+          route: s.originalRoute,
+          transportMode: s.originalTransportDetails.mode,
+          transportDetails: s.originalTransportDetails,
+        };
+      })
+    );
+  };
+
+  const sendCustomerNotification = (
+    shipmentId: string,
+    channel: 'SMS' | 'WHATSAPP' | 'EMAIL',
+    customMsg?: string
+  ) => {
+    const nowFormatted = new Date().toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    updateShipmentsState((prev) =>
+      prev.map((s) => {
+        if (s.id !== shipmentId) return s;
+
+        const notif: CustomerNotification = {
+          id: `NOTIF-${Date.now()}`,
+          shipmentId: s.id,
+          trackingId: s.id,
+          recipientName: s.receiver.name,
+          recipientPhone: s.receiver.phone,
+          recipientEmail: s.receiver.email || 'customer@speedlogistics.demo',
+          channel,
+          title: `Delivery Milestone Advisory (${channel})`,
+          message: customMsg || `Speed Logistics Alert for ${s.id}: Consignment status is ${s.status.replace(/_/g, ' ')}. Estimated arrival: ${new Date(s.estimatedArrival).toLocaleDateString()}. Track live on console.`,
+          sentAt: nowFormatted,
+          deliveryStatus: 'DELIVERED',
+        };
+
+        return {
+          ...s,
+          customerNotifications: [notif, ...(s.customerNotifications || [])],
+        };
+      })
+    );
+  };
+
   const simulateDelay = (shipmentId: string, reason: string) => {
     advanceShipmentStatus(shipmentId, 'DELAYED', reason);
   };
@@ -427,7 +870,7 @@ export const ShipmentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const clearAllShipments = () => {
     localStorage.removeItem(STORAGE_KEY);
-    setShipments([]);
+    updateShipmentsState(() => []);
     setSelectedTrackingId(null);
     setCurrentView('create');
   };
@@ -459,13 +902,23 @@ export const ShipmentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         approveAtOriginWarehouse,
         allocateTransportMode,
         confirmWarehouseInspection,
+        divertToWarehousePickup,
         confirmCollection,
         simulateDelay,
         resolveDelay,
         clearAllShipments,
         resetDemoData,
         loadScenario,
+        isCloudSyncing,
+        cloudSyncStatus,
+        lastCloudSyncTime,
+        syncWithCloud,
         counts,
+        activeDisruptions: ACTIVE_SYSTEM_DISRUPTIONS,
+        autoRerouteShipment,
+        autoRerouteAllAffected,
+        revertReroute,
+        sendCustomerNotification,
       }}
     >
       {children}

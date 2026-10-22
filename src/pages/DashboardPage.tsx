@@ -12,7 +12,9 @@ import {
   PlusCircle, 
   Building2, 
   Calendar, 
-  Filter 
+  Filter,
+  Zap,
+  Radio
 } from 'lucide-react';
 
 export const DashboardPage: React.FC = () => {
@@ -20,11 +22,15 @@ export const DashboardPage: React.FC = () => {
     shipments, 
     counts, 
     setCurrentView, 
-    setSelectedTrackingId 
+    setSelectedTrackingId,
+    activeDisruptions,
+    autoRerouteShipment,
+    autoRerouteAllAffected
   } = useShipments();
 
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
+  const [rerouteFeedback, setRerouteFeedback] = useState<{ count: number; message: string } | null>(null);
 
   // Filter shipments
   const filteredShipments = shipments.filter((item) => {
@@ -33,6 +39,8 @@ export const DashboardPage: React.FC = () => {
     if (filterStatus === 'DELIVERED' && item.status !== 'DELIVERED' && item.status !== 'COLLECTED') return false;
     if (filterStatus === 'DELAYED' && item.status !== 'DELAYED' && !item.isDelayed) return false;
     if (filterStatus === 'AWAITING_PICKUP' && item.status !== 'READY_FOR_PICKUP' && item.status !== 'ARRIVED_AT_HUB') return false;
+    if (filterStatus === 'LOCATION_UNAVAILABLE' && !item.isLocationUnavailable) return false;
+    if (filterStatus === 'REROUTED' && !item.isRerouted) return false;
     if (filterStatus === 'OUT_FOR_DELIVERY' && item.status !== 'OUT_FOR_DELIVERY') return false;
 
     // Search filter
@@ -236,6 +244,117 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>
 
+      {/* Reroute Feedback Banner if triggered */}
+      {rerouteFeedback && (
+        <div className="p-4 rounded-xl bg-purple-900 text-white border border-purple-500 flex items-center justify-between shadow-lg animate-fadeIn">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-purple-500/30 border border-purple-400 flex items-center justify-center text-purple-200">
+              <Zap className="w-4 h-4" />
+            </div>
+            <div>
+              <span className="font-bold text-xs uppercase tracking-wider text-purple-300 block">Dynamic Reroute Engine Notification</span>
+              <p className="text-xs text-white">{rerouteFeedback.message}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setRerouteFeedback(null)}
+            className="text-purple-300 hover:text-white text-xs px-2.5 py-1 bg-purple-800/80 rounded-lg transition-colors"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* AIRSPACE & WEATHER DISRUPTION RADAR & DYNAMIC REROUTING DESK */}
+      <div className="rounded-2xl bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 border border-amber-500/40 p-6 text-white shadow-xl relative overflow-hidden">
+        {/* Glowing background decor */}
+        <div className="absolute -right-16 -top-16 w-64 h-64 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute right-40 -bottom-16 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10 pb-5 border-b border-slate-800">
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/40 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                Airspace Emergency Advisory
+              </span>
+              <span className="text-amber-400 text-xs font-semibold flex items-center gap-1">
+                <Radio className="w-3.5 h-3.5" />
+                3 Commercial Corridors Grounded
+              </span>
+              <span className="text-slate-400 text-xs">• Dynamic Route Optimizer Online</span>
+            </div>
+            <h3 className="text-xl font-black text-white tracking-tight flex items-center gap-2">
+              <span>Severe Weather & Airspace Restrictions Alert Desk</span>
+            </h3>
+            <p className="text-xs text-slate-300 max-w-3xl leading-relaxed">
+              Multiple commercial freighter flights have been delayed or cancelled due to localized squall fronts and emergency airspace restrictions. Speed Logistics Dynamic Routing automatically re-computes alternate multi-modal corridors (Ocean Container Lines & Express High-Speed Rail) and triggers instant customer WhatsApp & SMS advisories.
+            </p>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
+            <button
+              onClick={() => {
+                const res = autoRerouteAllAffected();
+                setRerouteFeedback({
+                  count: res.reroutedCount,
+                  message: res.reroutedCount > 0
+                    ? `⚡ Successfully rerouted ${res.reroutedCount} air cargo consignments to deep-sea maritime and heavy rail corridors! Automated customer notifications have been dispatched with revised ETAs.`
+                    : 'All active air freight consignments are already safely rerouted to contingency corridors.'
+                });
+              }}
+              className="px-5 py-3 bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-amber-950/50 flex items-center justify-center gap-2 transition-all hover:scale-[1.02] cursor-pointer"
+            >
+              <Zap className="w-4 h-4 fill-slate-950" />
+              <span>⚡ Auto-Reroute All Affected Air Freight</span>
+            </button>
+
+            <button
+              onClick={() => setFilterStatus(filterStatus === 'REROUTED' ? 'ALL' : 'REROUTED')}
+              className={`px-4 py-3 rounded-xl text-xs font-bold border transition-colors flex items-center justify-center gap-2 ${
+                filterStatus === 'REROUTED'
+                  ? 'bg-purple-600 text-white border-purple-400 shadow-md'
+                  : 'bg-slate-800/80 hover:bg-slate-700/80 text-purple-300 border-slate-700'
+              }`}
+            >
+              <span>View Rerouted ({counts.rerouted})</span>
+            </button>
+          </div>
+        </div>
+
+        {/* 3 Active Disruption Corridors */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-5 relative z-10">
+          {activeDisruptions.map((disruption) => (
+            <div
+              key={disruption.id}
+              className="bg-slate-900/90 rounded-xl p-4 border border-slate-800 hover:border-amber-500/50 transition-all space-y-2 text-xs"
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-amber-400 text-[11px] uppercase tracking-wide">
+                  {disruption.affectedAirspaceOrCorridor}
+                </span>
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                  {disruption.severity}
+                </span>
+              </div>
+              <h4 className="font-bold text-white text-xs">{disruption.title}</h4>
+              <p className="text-[11px] text-slate-400 leading-snug line-clamp-2">
+                {disruption.description}
+              </p>
+              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px]">
+                <div className="text-cyan-400 font-semibold flex items-center gap-1">
+                  <span>Bypass:</span>
+                  <span className="text-white font-mono font-normal">
+                    {disruption.contingencyMode === 'OCEAN' ? '🚢 Deep-Sea Ocean Line' : disruption.contingencyMode === 'RAIL' ? '🚆 Intermodal Rail' : '🚛 Road Hauler'}
+                  </span>
+                </div>
+                <span className="text-slate-500 text-[10px]">{disruption.reportedAt}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {/* Shipments Table Section */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-subtle overflow-hidden">
         {/* Table Controls */}
@@ -296,6 +415,26 @@ export const DashboardPage: React.FC = () => {
                 }`}
               >
                 Hub Pickup ({counts.awaitingPickup})
+              </button>
+              <button
+                onClick={() => setFilterStatus('LOCATION_UNAVAILABLE')}
+                className={`px-2.5 py-1 rounded-md transition-colors ${
+                  filterStatus === 'LOCATION_UNAVAILABLE'
+                    ? 'bg-amber-600 text-white shadow-xs font-semibold'
+                    : 'text-amber-700 hover:text-amber-900'
+                }`}
+              >
+                ⚠️ Location Unavailable ({shipments.filter((s) => s.isLocationUnavailable).length})
+              </button>
+              <button
+                onClick={() => setFilterStatus('REROUTED')}
+                className={`px-2.5 py-1 rounded-md transition-colors ${
+                  filterStatus === 'REROUTED'
+                    ? 'bg-purple-600 text-white shadow-xs font-semibold'
+                    : 'text-purple-700 hover:text-purple-900'
+                }`}
+              >
+                ⚡ Rerouted ({counts.rerouted})
               </button>
               <button
                 onClick={() => setFilterStatus('DELAYED')}
@@ -400,6 +539,13 @@ export const DashboardPage: React.FC = () => {
                     {/* Delivery Mode */}
                     <td className="py-3.5 px-4">
                       <DeliveryTypeBadge type={s.deliveryType} size="sm" />
+                      {s.isLocationUnavailable && (
+                        <div className="mt-1">
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                            ⚠️ Location Unavailable (Self-Pickup)
+                          </span>
+                        </div>
+                      )}
                       {s.assignedHub && (
                         <div className="text-[10px] text-slate-500 mt-1 flex items-center gap-1">
                           <Building2 className="w-3 h-3 text-slate-400" />
@@ -423,6 +569,12 @@ export const DashboardPage: React.FC = () => {
                         <div>
                           <TransportModeBadge mode={s.transportMode} size="sm" />
                         </div>
+                        {s.isRerouted && (
+                          <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-900 border border-purple-300">
+                            <Zap className="w-2.5 h-2.5 text-purple-600" />
+                            <span>Bypassed Airspace ({s.transportMode})</span>
+                          </div>
+                        )}
                         {s.transportDetails && (
                           <div className="text-[10px] text-purple-700 font-mono">
                             {s.transportDetails.carrierName} ({s.transportDetails.identifier})
@@ -457,6 +609,23 @@ export const DashboardPage: React.FC = () => {
                     {/* Actions */}
                     <td className="py-3.5 px-4 text-right">
                       <div className="flex items-center justify-end gap-1.5">
+                        {s.transportMode === 'AIR' && !s.isRerouted && (
+                          <button
+                            onClick={() => {
+                              autoRerouteShipment(s.id);
+                              setRerouteFeedback({
+                                count: 1,
+                                message: `⚡ Air consignment ${s.id} rerouted to bypass restricted airspace! Customer notified.`
+                              });
+                            }}
+                            className="px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-md font-bold text-xs transition-colors flex items-center gap-1 shadow-2xs"
+                            title="Airspace Disruption Risk: Reroute to Ocean/Rail contingency corridor"
+                          >
+                            <Zap className="w-3 h-3" />
+                            <span>Reroute</span>
+                          </button>
+                        )}
+
                         <button
                           onClick={() => handleTrack(s.id)}
                           className="px-2.5 py-1 bg-brand-50 hover:bg-brand-100 text-brand-700 rounded-md font-semibold text-xs transition-colors"
